@@ -118,8 +118,210 @@ const sendMessage = async (req, res) => {
     res.status(500).json({ error: "Internal Server Error" });
   }
 };
+const getChatUsers = async (req, res) => {
+  try {
+   const userId = String(req.query.userId).trim(); 
+if (!userId) return res.status(400).json({ error: "userId is required" });
+
+console.log("Checking user existence for:", userId);
+const userExists = await prisma.user.findUnique({
+  where: { id: userId }
+});
+
+
+    const sentMessages = await prisma.message.findMany({
+      where: { senderId: userId },
+      include: { receiver: true },
+    });
+
+    console.log("Sent messages:", sentMessages.length);
+
+    const receivedMessages = await prisma.message.findMany({
+      where: { receiverId: userId },
+      include: { sender: true },
+    });
+
+    console.log("Received messages:", receivedMessages.length);
+
+    const chatUsers = [
+      ...sentMessages.map(m => m.receiver),
+      ...receivedMessages.map(m => m.sender),
+    ].filter(Boolean); // Ensure no nulls
+
+    console.log("Total chat users before deduplication:", chatUsers.length);
+
+    const uniqueUsers = Array.from(new Map(chatUsers.map(u => [u.id, u])).values());
+
+    console.log("Unique chat users:", uniqueUsers);
+
+    return res.json(uniqueUsers);
+  } catch (error) {
+    console.error("Error in getChatUsers:", error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+};
+
+
+const editMessage = async (req, res) => {
+  try {
+    const { messageId, newContent } = req.body;
+
+    if (!messageId || !newContent) {
+      return res.status(400).json({ error: "messageId and newContent are required" });
+    }
+
+    const updated = await prisma.message.update({
+      where: { id: messageId },
+      data: { content: newContent },
+    });
+
+    return res.json(updated);
+  } catch (error) {
+    console.error("Error editing message:", error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+};
+
+const deleteMessage = async (req, res) => {
+  try {
+    const { messageId } = req.body;
+
+    if (!messageId) {
+      return res.status(400).json({ error: "messageId is required" });
+    }
+
+    await prisma.message.delete({
+      where: { id: messageId },
+    });
+
+    return res.json({ message: "Message deleted successfully" });
+  } catch (error) {
+    console.error("Error deleting message:", error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+};
+
+const getRecentMessages = async (req, res) => {
+  try {
+   const userId = String(req.query.userId).trim(); // Ensure it's a string and trimmed
+if (!userId) return res.status(400).json({ error: "userId is required" });
+
+console.log("Checking user existence for:", userId);
+const userExists = await prisma.user.findUnique({
+  where: { id: userId }
+});
+
+
+    const messages = await prisma.message.findMany({
+      where: {
+        OR: [
+          { senderId: userId },
+          { receiverId: userId },
+        ],
+      },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        sender: true,
+        receiver: true,
+      },
+    });
+
+    console.log("Total messages found:", messages.length);
+
+    const recentMap = new Map();
+
+    for (let msg of messages) {
+      const chatKey = [msg.senderId, msg.receiverId].sort().join("-");
+      if (!recentMap.has(chatKey)) {
+        recentMap.set(chatKey, {
+          id: msg.id,
+          content: msg.content,
+          createdAt: msg.createdAt,
+          isRead: msg.isRead,
+          sender: {
+            id: msg.sender?.id,
+            username: msg.sender?.username,
+          },
+          receiver: {
+            id: msg.receiver?.id,
+            username: msg.receiver?.username,
+          }
+        });
+      }
+    }
+
+    const result = Array.from(recentMap.values());
+    console.log("Recent conversations:", result.length);
+
+    return res.json(result);
+  } catch (error) {
+    console.error("Error in getRecentMessages:", error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+};
+
+
+const markMessagesAsRead = async (req, res) => {
+  try {
+    const { senderId, receiverId } = req.body;
+
+    if (!senderId || !receiverId) {
+      return res.status(400).json({ error: "senderId and receiverId are required" });
+    }
+
+    await prisma.message.updateMany({
+      where: {
+        senderId: senderId.trim(),
+        receiverId: receiverId.trim(),
+        isRead: false,
+      },
+      data: { isRead: true },
+    });
+
+    return res.json({ message: "Messages marked as read" });
+  } catch (error) {
+    console.error("Error in markMessagesAsRead:", error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+};
+
+
+const getUnreadCount = async (req, res) => {
+  try {
+    const { userId } = req.query;
+
+    if (!userId) return res.status(400).json({ error: "userId is required" });
+
+    const unreadCounts = await prisma.message.groupBy({
+      by: ['senderId'],
+      where: {
+        receiverId: userId.trim(),
+        isRead: false,
+      },
+      _count: {
+        _all: true,
+      },
+    });
+
+    return res.json(unreadCounts.map(item => ({
+      senderId: item.senderId,
+      count: item._count._all,
+    })));
+  } catch (error) {
+    console.error("Error in getUnreadCount:", error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+};
+
 
 module.exports = {
-  getMessages,
-  sendMessage,
+getMessages,
+sendMessage,
+getChatUsers,
+editMessage,
+deleteMessage,
+getRecentMessages,
+getRecentMessages,
+markMessagesAsRead,
+getUnreadCount,
 };
