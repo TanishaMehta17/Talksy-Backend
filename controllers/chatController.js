@@ -313,6 +313,58 @@ const getUnreadCount = async (req, res) => {
   }
 };
 
+const newChat = async (req, res) => {
+  try {
+    let { senderId, receiverId } = req.body;
+
+    senderId = senderId?.trim();
+    receiverId = receiverId?.trim();
+
+    if (!senderId || !receiverId) {
+      return res.status(400).json({ error: "senderId and receiverId are required" });
+    }
+
+    if (senderId === receiverId) {
+      return res.status(400).json({ error: "Cannot start chat with yourself" });
+    }
+
+    const sender = await prisma.user.findUnique({ where: { id: senderId } });
+    const receiver = await prisma.user.findUnique({ where: { id: receiverId } });
+
+    if (!sender || !receiver) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Check if there's any existing message thread
+    const existingMessages = await prisma.message.findFirst({
+      where: {
+        OR: [
+          { senderId, receiverId },
+          { senderId: receiverId, receiverId: senderId },
+        ],
+      },
+    });
+
+    if (existingMessages) {
+      return res.status(200).json({ message: "Chat already exists" });
+    }
+
+    // Create a dummy system message to initiate chat (optional)
+    const initMessage = await prisma.message.create({
+      data: {
+        senderId,
+        receiverId,
+        content: "[Chat initiated]",
+        isRead: false,
+      },
+    });
+
+    return res.status(201).json({ message: "New chat started", chat: initMessage });
+  } catch (error) {
+    console.error("❌ Error in newChat:", error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+};
 
 module.exports = {
 getMessages,
@@ -324,4 +376,5 @@ getRecentMessages,
 getRecentMessages,
 markMessagesAsRead,
 getUnreadCount,
+newChat
 };

@@ -6,7 +6,9 @@ deleteMessage,
 getRecentMessages,
 getChatUsers,
 markMessagesAsRead,
-getUnreadCount, } = require('../controllers/chatController');
+getUnreadCount,
+newChat
+} = require('../controllers/chatController');
 
 router.get('/messages', getMessages);
 router.post('/messages', sendMessage);
@@ -16,4 +18,5 @@ router.post('/mark-messages-as-read', markMessagesAsRead);
 router.get('/unread-count', getUnreadCount);
 router.post('/edit-message', editMessage);
 router.post('/delete-message', deleteMessage);
+router.post("/new-chat", newChat)
 module.exports = router;
