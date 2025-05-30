@@ -2,7 +2,7 @@ const prisma = require("../config/db");
 const { getRedis } = require("../config/redis");
 const { producer } = require("../config/kafka");
 
-// ✅ Get chat messages between two users (with Redis caching and debug logs)
+//  Get chat messages between two users (with Redis caching and debug logs)
 const getMessages = async (req, res) => {
   try {
     let { senderId, receiverId } = req.query;
@@ -10,12 +10,12 @@ const getMessages = async (req, res) => {
     // Trim and log IDs
     senderId = senderId?.trim();
     receiverId = receiverId?.trim();
-    console.log("🟡 Request received for getMessages");
-    console.log("➡️ senderId:", senderId);
-    console.log("➡️ receiverId:", receiverId);
+    console.log(" Request received for getMessages");
+    console.log(" senderId:", senderId);
+    console.log(" receiverId:", receiverId);
 
     if (!senderId || !receiverId) {
-      console.log("❌ Missing senderId or receiverId");
+      console.log(" Missing senderId or receiverId");
       return res.status(400).json({ error: "senderId and receiverId are required" });
     }
 
@@ -23,15 +23,15 @@ const getMessages = async (req, res) => {
 
     const [id1, id2] = [senderId, receiverId].sort();
     const cacheKey = `chat:${id1}:${id2}`;
-    console.log("🗝️ Redis Cache Key:", cacheKey);
+    console.log(" Redis Cache Key:", cacheKey);
 
     const cached = await redisClient.get(cacheKey);
     if (cached) {
-      console.log("✅ Cache hit");
+      console.log(" Cache hit");
       return res.json(JSON.parse(cached));
     }
 
-    console.log("⛔ Cache miss. Querying database...");
+    console.log(" Cache miss. Querying database...");
 
     const messages = await prisma.message.findMany({
       where: {
@@ -41,28 +41,33 @@ const getMessages = async (req, res) => {
         ],
       },
       orderBy: { createdAt: "asc" },
-      include: {
+     select: {
+        id: true, 
+        content: true,
+        createdAt: true,
+        senderId: true,
+        receiverId: true,
         sender: { select: { username: true } },
         receiver: { select: { username: true } },
       },
     });
 
-    console.log("📦 Messages fetched from DB:", messages.length);
+    console.log(" Messages fetched from DB:", messages.length);
     if (messages.length === 0) {
-      console.log("⚠️ No messages found in DB for this pair");
+      console.log(" No messages found in DB for this pair");
     }
 
     await redisClient.set(cacheKey, JSON.stringify(messages), "EX", 3600);
-    console.log("✅ Messages cached in Redis");
+    console.log(" Messages cached in Redis");
 
     return res.json(messages);
   } catch (error) {
-    console.error("❌ Error in getMessages:", error);
+    console.error(" Error in getMessages:", error);
     res.status(500).json({ error: "Internal Server Error" });
   }
 };
 
-// ✅ Send a message and publish to Redis/Kafka (with debug logs)
+//  Send a message and publish to Redis/Kafka (with debug logs)
 const sendMessage = async (req, res) => {
   try {
     let { senderId, receiverId, content } = req.body;
@@ -71,13 +76,13 @@ const sendMessage = async (req, res) => {
     senderId = senderId?.trim();
     receiverId = receiverId?.trim();
     content = content?.trim();
-    console.log("🟢 Request received for sendMessage");
-    console.log("➡️ senderId:", senderId);
-    console.log("➡️ receiverId:", receiverId);
-    console.log("➡️ content:", content);
+    console.log(" Request received for sendMessage");
+    console.log(" senderId:", senderId);
+    console.log(" receiverId:", receiverId);
+    console.log(" content:", content);
 
     if (!senderId || !receiverId || !content) {
-      console.log("❌ Missing required fields in sendMessage");
+      console.log(" Missing required fields in sendMessage");
       return res.status(400).json({ error: "senderId, receiverId and content are required" });
     }
 
@@ -89,13 +94,13 @@ const sendMessage = async (req, res) => {
       },
     });
 
-    console.log("✅ New message created:", newMessage.id);
+    console.log(" New message created:", newMessage.id);
 
     const redisClient = getRedis();
     const [id1, id2] = [senderId, receiverId].sort();
     const cacheKey = `chat:${id1}:${id2}`;
     await redisClient.del(cacheKey); // Invalidate cache
-    console.log("🗑️ Redis cache invalidated for:", cacheKey);
+    console.log(" Redis cache invalidated for:", cacheKey);
 
     await producer.send({
       topic: "chat-events",
@@ -110,11 +115,11 @@ const sendMessage = async (req, res) => {
       ],
     });
 
-    console.log("📤 Message sent to Kafka topic: chat-events");
+    console.log("Message sent to Kafka topic: chat-events");
 
     return res.status(201).json(newMessage);
   } catch (error) {
-    console.error("❌ Error in sendMessage:", error);
+    console.error(" Error in sendMessage:", error);
     res.status(500).json({ error: "Internal Server Error" });
   }
 };
@@ -146,7 +151,7 @@ const userExists = await prisma.user.findUnique({
     const chatUsers = [
       ...sentMessages.map(m => m.receiver),
       ...receivedMessages.map(m => m.sender),
-    ].filter(Boolean); // Ensure no nulls
+    ].filter(Boolean); 
 
     console.log("Total chat users before deduplication:", chatUsers.length);
 
@@ -173,7 +178,15 @@ const editMessage = async (req, res) => {
     const updated = await prisma.message.update({
       where: { id: messageId },
       data: { content: newContent },
+      include: { sender: true, receiver: true },
     });
+
+    // Invalidate Redis cache
+    const redisClient = getRedis();
+    const [id1, id2] = [updated.senderId, updated.receiverId].sort();
+    const cacheKey = `chat:${id1}:${id2}`;
+    await redisClient.del(cacheKey);
+    console.log("🧹 Redis cache cleared for:", cacheKey);
 
     return res.json(updated);
   } catch (error) {
@@ -181,6 +194,7 @@ const editMessage = async (req, res) => {
     res.status(500).json({ error: "Internal Server Error" });
   }
 };
+
 
 const deleteMessage = async (req, res) => {
   try {
@@ -190,9 +204,25 @@ const deleteMessage = async (req, res) => {
       return res.status(400).json({ error: "messageId is required" });
     }
 
+    // Get message before deletion to retrieve sender/receiver IDs
+    const message = await prisma.message.findUnique({
+      where: { id: messageId },
+    });
+
+    if (!message) {
+      return res.status(404).json({ error: "Message not found" });
+    }
+
     await prisma.message.delete({
       where: { id: messageId },
     });
+
+    // Invalidate Redis cache
+    const redisClient = getRedis();
+    const [id1, id2] = [message.senderId, message.receiverId].sort();
+    const cacheKey = `chat:${id1}:${id2}`;
+    await redisClient.del(cacheKey);
+    console.log(" Redis cache cleared for:", cacheKey);
 
     return res.json({ message: "Message deleted successfully" });
   } catch (error) {
@@ -315,56 +345,67 @@ const getUnreadCount = async (req, res) => {
 
 const newChat = async (req, res) => {
   try {
-    let { senderId, receiverId } = req.body;
+    let { senderId, receiverEmail } = req.body;
 
     senderId = senderId?.trim();
-    receiverId = receiverId?.trim();
+    receiverEmail = receiverEmail?.trim();
 
-    if (!senderId || !receiverId) {
-      return res.status(400).json({ error: "senderId and receiverId are required" });
-    }
-
-    if (senderId === receiverId) {
-      return res.status(400).json({ error: "Cannot start chat with yourself" });
+    if (!senderId || !receiverEmail) {
+      return res.status(400).json({ error: "senderId and receiverEmail are required" });
     }
 
     const sender = await prisma.user.findUnique({ where: { id: senderId } });
-    const receiver = await prisma.user.findUnique({ where: { id: receiverId } });
+    const receiver = await prisma.user.findUnique({ where: { email: receiverEmail } });
 
     if (!sender || !receiver) {
       return res.status(404).json({ error: "User not found" });
     }
 
-    // Check if there's any existing message thread
+    if (sender.id === receiver.id) {
+      return res.status(400).json({ error: "Cannot start chat with yourself" });
+    }
+
     const existingMessages = await prisma.message.findFirst({
       where: {
         OR: [
-          { senderId, receiverId },
-          { senderId: receiverId, receiverId: senderId },
+          { senderId: sender.id, receiverId: receiver.id },
+          { senderId: receiver.id, receiverId: sender.id },
         ],
       },
     });
 
     if (existingMessages) {
-      return res.status(200).json({ message: "Chat already exists" });
+      return res.status(200).json({
+        message: "Chat already exists",
+        chat: {
+          receiverId: receiver.id,
+          receiverName: receiver.username,
+        },
+      });
     }
 
-    // Create a dummy system message to initiate chat (optional)
     const initMessage = await prisma.message.create({
       data: {
-        senderId,
-        receiverId,
+        senderId: sender.id,
+        receiverId: receiver.id,
         content: "[Chat initiated]",
         isRead: false,
       },
     });
 
-    return res.status(201).json({ message: "New chat started", chat: initMessage });
+    return res.status(201).json({
+      message: "New chat started",
+      chat: {
+        receiverId: receiver.id,
+        receiverName: receiver.username,
+      },
+    });
   } catch (error) {
-    console.error("❌ Error in newChat:", error);
+    console.error(" Error in newChat:", error);
     res.status(500).json({ error: "Internal Server Error" });
   }
 };
+
 
 module.exports = {
 getMessages,
