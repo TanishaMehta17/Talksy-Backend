@@ -1,6 +1,6 @@
 const prisma = require("../config/db");
 const { getRedis } = require("../config/redis");
-const { producer } = require("../config/kafka");
+const { produceEvent  } = require("../config/kafka");
 
 //  Get chat messages between two users (with Redis caching and debug logs)
 const getMessages = async (req, res) => {
@@ -102,18 +102,14 @@ const sendMessage = async (req, res) => {
     await redisClient.del(cacheKey); // Invalidate cache
     console.log(" Redis cache invalidated for:", cacheKey);
 
-    await producer.send({
-      topic: "chat-events",
-      messages: [
-        {
-          value: JSON.stringify({
-            type: "new-message",
-            message: newMessage,
-            timestamp: new Date().toISOString(),
-          }),
-        },
-      ],
-    });
+  
+    await produceEvent("chat-events", {
+  type: "new-message",
+  message: newMessage,
+  
+  timestamp: new Date().toISOString(),
+});
+
 
     console.log("Message sent to Kafka topic: chat-events");
 
@@ -123,6 +119,8 @@ const sendMessage = async (req, res) => {
     res.status(500).json({ error: "Internal Server Error" });
   }
 };
+
+
 const getChatUsers = async (req, res) => {
   try {
    const userId = String(req.query.userId).trim(); 
@@ -167,6 +165,35 @@ const userExists = await prisma.user.findUnique({
 };
 
 
+// const editMessage = async (req, res) => {
+//   try {
+//     const { messageId, newContent } = req.body;
+
+//     if (!messageId || !newContent) {
+//       return res.status(400).json({ error: "messageId and newContent are required" });
+//     }
+
+//     const updated = await prisma.message.update({
+//       where: { id: messageId },
+//       data: { content: newContent },
+//       include: { sender: true, receiver: true },
+//     });
+
+//     // Invalidate Redis cache
+//     const redisClient = getRedis();
+//     const [id1, id2] = [updated.senderId, updated.receiverId].sort();
+//     const cacheKey = `chat:${id1}:${id2}`;
+//     await redisClient.del(cacheKey);
+//     console.log("🧹 Redis cache cleared for:", cacheKey);
+
+//     return res.json(updated);
+//   } catch (error) {
+//     console.error("Error editing message:", error);
+//     res.status(500).json({ error: "Internal Server Error" });
+//   }
+// };
+//const { produceEvent } = require("../kafka/producer");
+
 const editMessage = async (req, res) => {
   try {
     const { messageId, newContent } = req.body;
@@ -181,12 +208,17 @@ const editMessage = async (req, res) => {
       include: { sender: true, receiver: true },
     });
 
-    // Invalidate Redis cache
+    // Clear Redis cache
     const redisClient = getRedis();
     const [id1, id2] = [updated.senderId, updated.receiverId].sort();
     const cacheKey = `chat:${id1}:${id2}`;
     await redisClient.del(cacheKey);
-    console.log("🧹 Redis cache cleared for:", cacheKey);
+
+    // Publish to Kafka
+    await produceEvent("chat-events", {
+      type: "EDIT_MESSAGE",
+      message: updated,
+    });
 
     return res.json(updated);
   } catch (error) {
@@ -196,6 +228,40 @@ const editMessage = async (req, res) => {
 };
 
 
+// const deleteMessage = async (req, res) => {
+//   try {
+//     const { messageId } = req.body;
+
+//     if (!messageId) {
+//       return res.status(400).json({ error: "messageId is required" });
+//     }
+
+//     // Get message before deletion to retrieve sender/receiver IDs
+//     const message = await prisma.message.findUnique({
+//       where: { id: messageId },
+//     });
+
+//     if (!message) {
+//       return res.status(404).json({ error: "Message not found" });
+//     }
+
+//     await prisma.message.delete({
+//       where: { id: messageId },
+//     });
+
+//     // Invalidate Redis cache
+//     const redisClient = getRedis();
+//     const [id1, id2] = [message.senderId, message.receiverId].sort();
+//     const cacheKey = `chat:${id1}:${id2}`;
+//     await redisClient.del(cacheKey);
+//     console.log(" Redis cache cleared for:", cacheKey);
+
+//     return res.json({ message: "Message deleted successfully" });
+//   } catch (error) {
+//     console.error("Error deleting message:", error);
+//     res.status(500).json({ error: "Internal Server Error" });
+//   }
+// };
 const deleteMessage = async (req, res) => {
   try {
     const { messageId } = req.body;
@@ -204,7 +270,6 @@ const deleteMessage = async (req, res) => {
       return res.status(400).json({ error: "messageId is required" });
     }
 
-    // Get message before deletion to retrieve sender/receiver IDs
     const message = await prisma.message.findUnique({
       where: { id: messageId },
     });
@@ -213,16 +278,19 @@ const deleteMessage = async (req, res) => {
       return res.status(404).json({ error: "Message not found" });
     }
 
-    await prisma.message.delete({
-      where: { id: messageId },
-    });
+    await prisma.message.delete({ where: { id: messageId } });
 
-    // Invalidate Redis cache
+    // Clear Redis cache
     const redisClient = getRedis();
     const [id1, id2] = [message.senderId, message.receiverId].sort();
     const cacheKey = `chat:${id1}:${id2}`;
     await redisClient.del(cacheKey);
-    console.log(" Redis cache cleared for:", cacheKey);
+
+    // Kafka event
+    await produceEvent("chat-events", {
+      type: "DELETE_MESSAGE",
+      message,
+    });
 
     return res.json({ message: "Message deleted successfully" });
   } catch (error) {
@@ -230,6 +298,7 @@ const deleteMessage = async (req, res) => {
     res.status(500).json({ error: "Internal Server Error" });
   }
 };
+
 
 const getRecentMessages = async (req, res) => {
   try {
@@ -291,6 +360,29 @@ const userExists = await prisma.user.findUnique({
 };
 
 
+// const markMessagesAsRead = async (req, res) => {
+//   try {
+//     const { senderId, receiverId } = req.body;
+
+//     if (!senderId || !receiverId) {
+//       return res.status(400).json({ error: "senderId and receiverId are required" });
+//     }
+
+//     await prisma.message.updateMany({
+//       where: {
+//         senderId: senderId.trim(),
+//         receiverId: receiverId.trim(),
+//         isRead: false,
+//       },
+//       data: { isRead: true },
+//     });
+
+//     return res.json({ message: "Messages marked as read" });
+//   } catch (error) {
+//     console.error("Error in markMessagesAsRead:", error);
+//     res.status(500).json({ error: "Internal Server Error" });
+//   }
+// };
 const markMessagesAsRead = async (req, res) => {
   try {
     const { senderId, receiverId } = req.body;
@@ -299,13 +391,20 @@ const markMessagesAsRead = async (req, res) => {
       return res.status(400).json({ error: "senderId and receiverId are required" });
     }
 
-    await prisma.message.updateMany({
+    const updated = await prisma.message.updateMany({
       where: {
         senderId: senderId.trim(),
         receiverId: receiverId.trim(),
         isRead: false,
       },
       data: { isRead: true },
+    });
+
+    // Kafka event for real-time updates
+    await produceEvent("chat-events", {
+      type: "MARK_AS_READ",
+      senderId,
+      receiverId,
     });
 
     return res.json({ message: "Messages marked as read" });
